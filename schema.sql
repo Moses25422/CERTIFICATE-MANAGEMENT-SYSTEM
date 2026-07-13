@@ -1,0 +1,24 @@
+CREATE TABLE IF NOT EXISTS students (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    student_id VARCHAR(50) NOT NULL UNIQUE,
+    full_name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    course_name VARCHAR(255) NOT NULL,
+    completion_date DATE NOT NULL,
+    signed_status TINYINT(1) NOT NULL DEFAULT 0,
+    collected TINYINT(1) NOT NULL DEFAULT 0,
+    collected_at DATETIME NULL,
+    last_reminder_sent_at DATETIME NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS email_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    student_id VARCHAR(50) NOT NULL,
+    recipient_email VARCHAR(255) NOT NULL,
+    subject VARCHAR(255) NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    error_message TEXT NULL,
+    sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
