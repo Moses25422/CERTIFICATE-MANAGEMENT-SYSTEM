@@ -1,0 +1,9 @@
+{
+    "host": "kcaucertificates@kcau.ac.ke",
+    "port": "587",
+    "username": "admin",
+    "password": "Admin@1234",
+    "encryption": "tls",
+    "from_address": "no-reply@example.com",
+    "from_name": "PTTI Certificate Office"
+}

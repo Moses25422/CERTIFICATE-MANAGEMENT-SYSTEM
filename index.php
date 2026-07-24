@@ -1,9 +1,21 @@
 <?php
+require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/db.php';
+require_once __DIR__ . '/includes/email.php';
+
+startSession();
+requireAdmin();
 
 $pdo = getDatabaseConnection();
+$emailService = new EmailService();
 $message = '';
 $messageType = 'info';
+
+if (isset($_SESSION['flash_message'])) {
+    $message = $_SESSION['flash_message'];
+    $messageType = $_SESSION['flash_message_type'] ?? 'info';
+    unset($_SESSION['flash_message'], $_SESSION['flash_message_type']);
+}
 
 function h($value)
 {
@@ -26,6 +38,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $signedStatus = isset($_POST['signed_status']) ? 1 : 0;
         $collected = isset($_POST['collected']) ? 1 : 0;
         $collectedAt = $collected ? date('Y-m-d H:i:s') : null;
+        $sendEmail = isset($_POST['send_email']) ? 1 : 0;
         $studentIdToEdit = isset($_POST['student_id_to_edit']) ? (int) $_POST['student_id_to_edit'] : 0;
 
         if ($studentIdToEdit > 0) {
@@ -55,6 +68,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ':collected' => $collected,
                 ':collected_at' => $collectedAt,
             ]);
+            
+            // Send notification email if not collected and email checkbox is checked
+            if (!$collected && $sendEmail && $emailService->isConfigured()) {
+                $stmt = $pdo->prepare('SELECT id FROM students WHERE student_id = :student_id');
+                $stmt->execute([':student_id' => $studentId]);
+                $newStudentId = $stmt->fetchColumn();
+                
+                if ($emailService->sendCertificateReadyNotification($fullName, $email, $courseName)) {
+                    $stmt = $pdo->prepare('INSERT INTO email_logs (student_id, recipient_email, subject, status) VALUES (:student_id, :recipient_email, :subject, :status)');
+                    $stmt->execute([
+                        ':student_id' => $studentId,
+                        ':recipient_email' => $email,
+                        ':subject' => 'Your Certificate is Ready for Collection',
+                        ':status' => 'sent',
+                    ]);
+                    $message .= ' Email notification sent to student.';
+                } else {
+                    $stmt = $pdo->prepare('INSERT INTO email_logs (student_id, recipient_email, subject, status, error_message) VALUES (:student_id, :recipient_email, :subject, :status, :error_message)');
+                    $stmt->execute([
+                        ':student_id' => $studentId,
+                        ':recipient_email' => $email,
+                        ':subject' => 'Your Certificate is Ready for Collection',
+                        ':status' => 'failed',
+                        ':error_message' => 'Email delivery failed',
+                    ]);
+                }
+            }
+            
             $message = 'Student added successfully.';
             $messageType = 'success';
         }
@@ -129,8 +170,17 @@ $courseOptions = $pdo->query('SELECT DISTINCT course_name FROM students ORDER BY
 <body>
     <div class="container">
         <header>
-            <h1>Certificate Collection Management System</h1>
-            <p>Manage student records, track certificate collection, and send reminder emails.</p>
+            <div class="header-main">
+                <div>
+                    <h1>Certificate Collection Management System</h1>
+                    <p>Manage student records, track certificate collection, and send reminder emails.</p>
+                </div>
+                <div class="header-actions">
+                    <span>Signed in as <?php echo h(getLoggedInAdmin()); ?></span>
+                    <a href="settings.php" class="secondary-link">Settings</a>
+                    <a href="logout.php" class="secondary-link">Sign out</a>
+                </div>
+            </div>
         </header>
 
         <?php if ($message !== ''): ?>
@@ -174,7 +224,12 @@ $courseOptions = $pdo->query('SELECT DISTINCT course_name FROM students ORDER BY
                         <input type="checkbox" name="collected" value="1" <?php echo ($editingStudent['collected'] ?? 0) ? 'checked' : ''; ?>>
                         Collected status
                     </label>
-                </div>
+                    <?php if (!$editingStudent || !($editingStudent['collected'] ?? 0)): ?>
+                        <label class="checkbox">
+                            <input type="checkbox" name="send_email" value="1" <?php echo $emailService->isConfigured() ? '' : 'disabled'; ?> title="<?php echo $emailService->isConfigured() ? 'Send notification email to student' : 'Email not configured'; ?>">
+                            Send notification email <?php echo !$emailService->isConfigured() ? '<span style="color: #ef4444; font-size: 0.8em;">(not configured)</span>' : ''; ?>
+                        </label>
+                    <?php endif; ?>
 
                 <div class="actions">
                     <button type="submit"><?php echo $editingStudent ? 'Update Student' : 'Add Student'; ?></button>
@@ -187,22 +242,37 @@ $courseOptions = $pdo->query('SELECT DISTINCT course_name FROM students ORDER BY
 
         <section class="card">
             <div class="toolbar">
-                <h2>Student Records</h2>
-                <form method="get" class="filters">
-                    <input type="text" name="search" value="<?php echo h($search); ?>" placeholder="Search by name, email, or course">
-                    <select name="course">
-                        <option value="">All courses</option>
-                        <?php foreach ($courseOptions as $option): ?>
-                            <option value="<?php echo h($option); ?>" <?php echo $courseFilter === $option ? 'selected' : ''; ?>><?php echo h($option); ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                    <select name="status">
-                        <option value="all" <?php echo $statusFilter === 'all' ? 'selected' : ''; ?>>All records</option>
-                        <option value="pending" <?php echo $statusFilter === 'pending' ? 'selected' : ''; ?>>Pending collection</option>
-                        <option value="collected" <?php echo $statusFilter === 'collected' ? 'selected' : ''; ?>>Collected</option>
-                    </select>
-                    <button type="submit">Filter</button>
-                </form>
+                <div class="toolbar-left">
+                    <h2>Student Records</h2>
+                </div>
+                <div class="toolbar-right">
+                    <div class="email-status">
+                        <?php if ($emailService->isConfigured()): ?>
+                            <span class="status-badge status-configured">✓ Email Configured</span>
+                        <?php else: ?>
+                            <span class="status-badge status-not-configured">✗ Email Not Configured</span>
+                            <a href="settings.php" class="secondary-link" style="margin-left: 8px;">Configure Email</a>
+                        <?php endif; ?>
+                    </div>
+                    <form method="post" action="reminders-scheduler.php" class="inline-form" style="display: inline-block; margin-left: 12px;">
+                        <button type="submit" class="small-btn" style="background: #8b5cf6;">📧 Send Reminders</button>
+                    </form>
+                    <form method="get" class="filters">
+                        <input type="text" name="search" value="<?php echo h($search); ?>" placeholder="Search by name, email, or course">
+                        <select name="course">
+                            <option value="">All courses</option>
+                            <?php foreach ($courseOptions as $option): ?>
+                                <option value="<?php echo h($option); ?>" <?php echo $courseFilter === $option ? 'selected' : ''; ?>><?php echo h($option); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <select name="status">
+                            <option value="all" <?php echo $statusFilter === 'all' ? 'selected' : ''; ?>>All records</option>
+                            <option value="pending" <?php echo $statusFilter === 'pending' ? 'selected' : ''; ?>>Pending collection</option>
+                            <option value="collected" <?php echo $statusFilter === 'collected' ? 'selected' : ''; ?>>Collected</option>
+                        </select>
+                        <button type="submit">Filter</button>
+                    </form>
+                </div>
             </div>
 
             <div class="table-wrap">
@@ -237,18 +307,27 @@ $courseOptions = $pdo->query('SELECT DISTINCT course_name FROM students ORDER BY
                                     <td><?php echo $student['collected'] ? 'Yes' : 'No'; ?></td>
                                     <td><?php echo $student['collected_at'] ? h($student['collected_at']) : '—'; ?></td>
                                     <td>
-                                        <div class="actions-cell">
-                                            <a href="index.php?edit=<?php echo (int) $student['id']; ?>" class="secondary-link">Edit</a>
-                                            <form method="post" class="inline-form">
-                                                <input type="hidden" name="action" value="mark_collected">
-                                                <input type="hidden" name="student_id" value="<?php echo (int) $student['id']; ?>">
-                                                <button type="submit" class="small-btn" <?php echo $student['collected'] ? 'disabled' : ''; ?>>Collect</button>
-                                            </form>
-                                            <form method="post" class="inline-form">
-                                                <input type="hidden" name="action" value="delete_student">
-                                                <input type="hidden" name="student_id" value="<?php echo (int) $student['id']; ?>">
-                                                <button type="submit" class="danger-btn">Delete</button>
-                                            </form>
+                                        <div class="actions-dropdown">
+                                            <button class="dropdown-toggle" onclick="toggleDropdown(this)">⋮ Actions</button>
+                                            <div class="dropdown-menu">
+                                                <a href="index.php?edit=<?php echo (int) $student['id']; ?>" class="dropdown-item edit-item">
+                                                    ✎ Edit
+                                                </a>
+                                                <form method="post" class="dropdown-form">
+                                                    <input type="hidden" name="action" value="mark_collected">
+                                                    <input type="hidden" name="student_id" value="<?php echo (int) $student['id']; ?>">
+                                                    <button type="submit" class="dropdown-item collect-item" <?php echo $student['collected'] ? 'disabled' : ''; ?>>
+                                                        ✓ Mark Collected
+                                                    </button>
+                                                </form>
+                                                <form method="post" class="dropdown-form">
+                                                    <input type="hidden" name="action" value="delete_student">
+                                                    <input type="hidden" name="student_id" value="<?php echo (int) $student['id']; ?>">
+                                                    <button type="submit" class="dropdown-item delete-item" onclick="return confirm('Are you sure you want to delete this student record?');">
+                                                        ✕ Delete
+                                                    </button>
+                                                </form>
+                                            </div>
                                         </div>
                                     </td>
                                 </tr>
@@ -259,5 +338,29 @@ $courseOptions = $pdo->query('SELECT DISTINCT course_name FROM students ORDER BY
             </div>
         </section>
     </div>
+
+    <script>
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            if (!event.target.closest('.actions-dropdown')) {
+                document.querySelectorAll('.dropdown-menu').forEach(menu => {
+                    menu.classList.remove('active');
+                });
+            }
+        });
+
+        function toggleDropdown(button) {
+            const dropdown = button.closest('.actions-dropdown');
+            const menu = dropdown.querySelector('.dropdown-menu');
+            
+            // Close all other dropdowns
+            document.querySelectorAll('.dropdown-menu').forEach(m => {
+                if (m !== menu) m.classList.remove('active');
+            });
+            
+            // Toggle this dropdown
+            menu.classList.toggle('active');
+        }
+    </script>
 </body>
 </html>

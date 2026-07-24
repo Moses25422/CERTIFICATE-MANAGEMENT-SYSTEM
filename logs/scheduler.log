@@ -1,0 +1,6 @@
+[2026-07-24 12:28:35] Scheduler started
+[2026-07-24 12:28:35] Executing reminder task...
+[2026-07-24 12:29:24] Scheduler started
+[2026-07-24 12:29:24] Executing reminder task...
+[2026-07-24 12:29:24] Successfully executed send_reminders.php: Reminder job completed. Sent 0 reminder(s).
+[2026-07-24 12:29:24] Scheduler completed successfully
