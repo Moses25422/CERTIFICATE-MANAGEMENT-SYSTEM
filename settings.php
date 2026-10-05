@@ -1,11 +1,15 @@
 <?php
 require_once __DIR__ . '/includes/auth.php';
+require_once __DIR__ . '/includes/email.php';
 
 startSession();
 requireAdmin();
 
 $configFile = __DIR__ . '/config/smtp.json';
 $message = '';
+$messageType = 'info';
+$testEmail = '';
+$emailService = new EmailService();
 
 // Load existing config if present
 $config = [
@@ -27,6 +31,7 @@ if (file_exists($configFile)) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $action = $_POST['action'] ?? 'save';
     $config['host'] = trim($_POST['host'] ?? '');
     $config['port'] = trim($_POST['port'] ?? '587');
     $config['username'] = trim($_POST['username'] ?? '');
@@ -39,13 +44,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         mkdir(__DIR__ . '/config', 0777, true);
     }
 
-    // Persist to JSON file. Warning: stores password in plain text for local use.
-    file_put_contents($configFile, json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+    if ($action === 'save') {
+        // Persist to JSON file. Warning: stores password in plain text for local use.
+        file_put_contents($configFile, json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 
-    $_SESSION['flash_message'] = 'SMTP settings saved.';
-    $_SESSION['flash_message_type'] = 'success';
-    header('Location: settings.php');
-    exit;
+        $_SESSION['flash_message'] = 'SMTP settings saved.';
+        $_SESSION['flash_message_type'] = 'success';
+        header('Location: settings.php');
+        exit;
+    }
+
+    if ($action === 'test_email') {
+        $testEmail = trim($_POST['test_email'] ?? '');
+
+        if ($testEmail === '') {
+            $message = 'Please enter an email address to send the test message.';
+            $messageType = 'info';
+        } else {
+            // Persist the latest SMTP values before testing.
+            file_put_contents($configFile, json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+            $emailService = new EmailService();
+
+            if (!$emailService->isConfigured()) {
+                $message = 'SMTP settings are incomplete. Please verify host and username first.';
+                $messageType = 'info';
+            } else {
+                $success = $emailService->sendTestEmail($testEmail);
+
+                if ($success) {
+                    $message = 'Test email sent successfully to ' . htmlspecialchars($testEmail, ENT_QUOTES, 'UTF-8') . '.';
+                    $messageType = 'success';
+                } else {
+                    $message = 'Test email failed: ' . $emailService->getLastError();
+                    $messageType = 'info';
+                }
+            }
+        }
+    }
 }
 ?>
 <!DOCTYPE html>
@@ -80,6 +115,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <?php echo htmlspecialchars($_SESSION['flash_message'], ENT_QUOTES, 'UTF-8'); ?>
             </div>
             <?php unset($_SESSION['flash_message'], $_SESSION['flash_message_type']); ?>
+        <?php endif; ?>
+
+        <?php if ($message !== ''): ?>
+            <div class="alert alert-<?php echo htmlspecialchars($messageType, ENT_QUOTES, 'UTF-8'); ?>">
+                <?php echo htmlspecialchars($message, ENT_QUOTES, 'UTF-8'); ?>
+            </div>
         <?php endif; ?>
 
         <section class="card">
@@ -122,6 +163,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="actions">
                     <button type="submit">Save settings</button>
                     <a href="index.php" class="secondary-link">Cancel</a>
+                </div>
+            </form>
+        </section>
+
+        <section class="card">
+            <h2>Send Test Email</h2>
+            <form method="post" class="settings-form">
+                <input type="hidden" name="action" value="test_email">
+                <label>
+                    Recipient Email
+                    <input type="email" name="test_email" value="<?php echo htmlspecialchars($testEmail, ENT_QUOTES, 'UTF-8'); ?>" required>
+                </label>
+                <div class="note">This sends a real SMTP test message using the configuration above.</div>
+                <div class="actions">
+                    <button type="submit">Send Test Email</button>
                 </div>
             </form>
         </section>

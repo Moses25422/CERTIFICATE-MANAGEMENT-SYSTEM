@@ -8,6 +8,7 @@ require_once __DIR__ . '/db.php';
 class EmailService
 {
     private $smtpConfig;
+    private $lastError = '';
 
     public function __construct()
     {
@@ -55,7 +56,28 @@ class EmailService
             'configured' => $this->isConfigured(),
             'host' => $this->smtpConfig['host'],
             'from' => $this->smtpConfig['from_address'],
+            'last_error' => $this->lastError,
         ];
+    }
+
+    public function getLastError(): string
+    {
+        return $this->lastError;
+    }
+
+    public function sendTestEmail(string $recipientEmail): bool
+    {
+        $subject = 'Certificate System SMTP Test Email';
+        $body = <<<EOT
+Hello,
+
+This is a test email from your Certificate Collection Management System installation.
+If you received this message, SMTP is configured correctly.
+
+Regards,
+Certificate Management System
+EOT;
+        return $this->sendEmail($recipientEmail, $subject, $body);
     }
 
     /**
@@ -85,6 +107,15 @@ class EmailService
      */
     public function sendPendingReminders(): array
     {
+        if (!$this->isConfigured()) {
+            return [
+                'success' => false,
+                'sent' => 0,
+                'failed' => 0,
+                'errors' => ['SMTP is not configured. Please complete email settings first.'],
+            ];
+        }
+
         $pdo = getDatabaseConnection();
         $today = new DateTime('today');
         $sentCount = 0;
@@ -133,17 +164,32 @@ class EmailService
      */
     private function sendEmail(string $to, string $subject, string $body): bool
     {
+        $this->lastError = '';
+
         if ($this->smtpConfig['host'] !== '') {
-            return $this->smtpSendMail($to, $subject, $body);
+            $success = $this->smtpSendMail($to, $subject, $body);
+            if (!$success && $this->lastError === '') {
+                $this->lastError = 'SMTP sending failed.';
+            }
+            return $success;
         }
 
         $headers = "From: {$this->smtpConfig['from_name']} <{$this->smtpConfig['from_address']}>\r\n";
         $headers .= "Reply-To: {$this->smtpConfig['from_address']}\r\n";
         $headers .= "Content-Type: text/plain; charset=UTF-8\r\n";
-        
-        return mail($to, $subject, $body, $headers);
+        $headers .= "X-Mailer: PHP/" . phpversion() . "\r\n";
+
+        $success = mail($to, $subject, $body, $headers);
+        if (!$success) {
+            $this->lastError = 'PHP mail() failed to send email.';
+        }
+
+        return $success;
     }
 
+    /**
+     * Send email via SMTP
+     */
     /**
      * Send email via SMTP
      */
@@ -158,10 +204,9 @@ class EmailService
         $fromName = $this->smtpConfig['from_name'];
 
         $remoteSocket = ($encryption === 'ssl' ? 'ssl://' : '') . $host . ':' . $port;
-        $socket = stream_socket_client($remoteSocket, $errno, $errstr, 15, STREAM_CLIENT_CONNECT, stream_context_create([]));
-        
+        $socket = @stream_socket_client($remoteSocket, $errno, $errstr, 15, STREAM_CLIENT_CONNECT, stream_context_create([]));
         if ($socket === false) {
-            return false;
+            return $this->smtpError("Failed to connect to SMTP server: {$errstr} ({$errno})");
         }
 
         stream_set_timeout($socket, 15);
@@ -169,19 +214,19 @@ class EmailService
         $response = fgets($socket, 515);
         if (strpos($response, '220') !== 0) {
             fclose($socket);
-            return false;
+            return $this->smtpError("SMTP server rejected connection: {$response}");
         }
 
         $serverName = parse_url('http://localhost', PHP_URL_HOST);
         fwrite($socket, "EHLO {$serverName}\r\n");
         $response = $this->smtpReadResponse($socket);
-        
+
         if (strpos($response, '250') !== 0) {
             fwrite($socket, "HELO {$serverName}\r\n");
             $response = $this->smtpReadResponse($socket);
             if (strpos($response, '250') !== 0) {
                 fclose($socket);
-                return false;
+                return $this->smtpError("SMTP HELO/EHLO handshake failed: {$response}");
             }
         }
 
@@ -190,17 +235,17 @@ class EmailService
             $response = $this->smtpReadResponse($socket);
             if (strpos($response, '220') !== 0) {
                 fclose($socket);
-                return false;
+                return $this->smtpError("SMTP STARTTLS failed: {$response}");
             }
             if (!stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT)) {
                 fclose($socket);
-                return false;
+                return $this->smtpError('Failed to enable TLS encryption on SMTP connection.');
             }
             fwrite($socket, "EHLO {$serverName}\r\n");
             $response = $this->smtpReadResponse($socket);
             if (strpos($response, '250') !== 0) {
                 fclose($socket);
-                return false;
+                return $this->smtpError("SMTP EHLO after STARTTLS failed: {$response}");
             }
         }
 
@@ -209,19 +254,19 @@ class EmailService
             $response = $this->smtpReadResponse($socket);
             if (strpos($response, '334') !== 0) {
                 fclose($socket);
-                return false;
+                return $this->smtpError("SMTP AUTH LOGIN request failed: {$response}");
             }
             fwrite($socket, base64_encode($username) . "\r\n");
             $response = $this->smtpReadResponse($socket);
             if (strpos($response, '334') !== 0) {
                 fclose($socket);
-                return false;
+                return $this->smtpError("SMTP username prompt failed: {$response}");
             }
             fwrite($socket, base64_encode($password) . "\r\n");
             $response = $this->smtpReadResponse($socket);
             if (strpos($response, '235') !== 0) {
                 fclose($socket);
-                return false;
+                return $this->smtpError("SMTP authentication failed: {$response}");
             }
         }
 
@@ -229,21 +274,21 @@ class EmailService
         $response = $this->smtpReadResponse($socket);
         if (strpos($response, '250') !== 0) {
             fclose($socket);
-            return false;
+            return $this->smtpError("SMTP MAIL FROM failed: {$response}");
         }
 
         fwrite($socket, "RCPT TO:<{$to}>\r\n");
         $response = $this->smtpReadResponse($socket);
         if (strpos($response, '250') !== 0 && strpos($response, '251') !== 0) {
             fclose($socket);
-            return false;
+            return $this->smtpError("SMTP RCPT TO failed: {$response}");
         }
 
         fwrite($socket, "DATA\r\n");
         $response = $this->smtpReadResponse($socket);
         if (strpos($response, '354') !== 0) {
             fclose($socket);
-            return false;
+            return $this->smtpError("SMTP DATA command failed: {$response}");
         }
 
         $mimeBody = "From: {$fromName} <{$from}>\r\n" .
@@ -260,12 +305,18 @@ class EmailService
         $response = $this->smtpReadResponse($socket);
         if (strpos($response, '250') !== 0) {
             fclose($socket);
-            return false;
+            return $this->smtpError("SMTP message send failed: {$response}");
         }
 
         fwrite($socket, "QUIT\r\n");
         fclose($socket);
         return true;
+    }
+
+    private function smtpError(string $message): bool
+    {
+        $this->lastError = $message;
+        return false;
     }
 
     /**

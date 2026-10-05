@@ -34,7 +34,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <div class="container">
         <section class="card login-card">
             <h1>Admin Sign In</h1>
-            <p>Only authorized administrators may manage student records and send reminders.</p>
+            <p>Only authorized administrators may manage student records and send email reminders.</p>
 
             <?php if ($message !== ''): ?>
                 <div class="alert alert-info"><?php echo htmlspecialchars($message, ENT_QUOTES, 'UTF-8'); ?></div>

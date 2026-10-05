@@ -8,7 +8,7 @@ function getDatabaseConnection(): PDO
         return $pdo;
     }
 
-    $driver = getenv('DB_DRIVER') ?: 'sqlite';
+    $driver = getenv('DB_DRIVER') ?: 'mysql';
     $databaseDir = __DIR__ . '/../database';
 
     if (!is_dir($databaseDir)) {
@@ -17,9 +17,9 @@ function getDatabaseConnection(): PDO
 
     if ($driver === 'mysql') {
         $host = getenv('DB_HOST') ?: '127.0.0.1';
-        $name = getenv('DB_NAME') ?: 'certificate_management';
-        $user = getenv('DB_USER') ?: 'root';
-        $pass = getenv('DB_PASS') ?: '';
+        $name = getenv('DB_NAME') ?: 'certificate';
+        $user = getenv('DB_USER') ?: 'u123456789_root';
+        $pass = getenv('DB_PASS') ?: 'Aye123456789';
         $dsn = "mysql:host={$host};dbname={$name};charset=utf8mb4";
     } else {
         $databasePath = getenv('DB_PATH') ?: $databaseDir . '/certificate_management.sqlite';

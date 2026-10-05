@@ -134,7 +134,7 @@ class SchedulerDiagnostics
             echo "   " . GREEN . "✓ Database connection OK\n" . RESET;
 
             // Check tables
-            $driver = getenv('DB_DRIVER') ?: 'sqlite';
+            $driver = getenv('DB_DRIVER') ?: 'mysql';
 
             $stmt = $pdo->query('
                 SELECT COUNT(*) as count FROM students

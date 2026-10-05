@@ -28,12 +28,12 @@ A simple PHP web application for managing short-course certificates. It supports
 No extra database setup is needed. The app will create a local SQLite database file at database/certificate_management.sqlite on first run.
 
 ### MySQL
-1. Create a database named certificate_management.
+1. Create a database named `certificate`.
 2. Import the SQL from schema.sql.
 3. Set these environment variables before running the app:
    - DB_DRIVER=mysql
    - DB_HOST=127.0.0.1
-   - DB_NAME=certificate_management
+   - DB_NAME=certificate
    - DB_USER=root
    - DB_PASS=
 

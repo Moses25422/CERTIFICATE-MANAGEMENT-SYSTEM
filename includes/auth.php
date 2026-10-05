@@ -9,12 +9,12 @@ function startSession(): void
 
 function getAdminUsername(): string
 {
-    return getenv('ADMIN_USER') ?: 'admin';
+    return getenv('ADMIN_USER') ?: 'PTTI2026';
 }
 
 function getAdminPasswordHash(): string
 {
-    return getenv('ADMIN_PASSWORD_HASH') ?: '$2y$10$FjLqJ3oCRrXgRgPt5UWD6u.B2DRZjR5yLNdkzKiRGXYc/fHDO2I/m';
+    return getenv('ADMIN_PASSWORD_HASH') ?: '$2y$10$Qf/T85ujyP80g7d0chXDyui35FA5kfYBgK07vA51EL5gds9ujDome';
 }
 
 function isAdminAuthenticated(): bool
