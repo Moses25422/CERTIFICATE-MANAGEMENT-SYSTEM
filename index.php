@@ -1,13 +1,11 @@
 <?php
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/db.php';
-require_once __DIR__ . '/includes/email.php';
 
 startSession();
 requireAdmin();
 
 $pdo = getDatabaseConnection();
-$emailService = new EmailService();
 $message = '';
 $messageType = 'info';
 
@@ -32,21 +30,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         $fullName = trim($_POST['full_name'] ?? '');
-        $email = trim($_POST['email'] ?? '');
         $courseName = trim($_POST['course_name'] ?? '');
         $completionDate = trim($_POST['completion_date'] ?? '');
         $signedStatus = isset($_POST['signed_status']) ? 1 : 0;
         $collected = isset($_POST['collected']) ? 1 : 0;
         $collectedAt = $collected ? date('Y-m-d H:i:s') : null;
-        $sendEmail = isset($_POST['send_email']) ? 1 : 0;
         $studentIdToEdit = isset($_POST['student_id_to_edit']) ? (int) $_POST['student_id_to_edit'] : 0;
 
         if ($studentIdToEdit > 0) {
-            $stmt = $pdo->prepare('UPDATE students SET student_id = :student_id, full_name = :full_name, email = :email, course_name = :course_name, completion_date = :completion_date, signed_status = :signed_status, collected = :collected, collected_at = :collected_at WHERE id = :id');
+            $stmt = $pdo->prepare('UPDATE students SET student_id = :student_id, full_name = :full_name, course_name = :course_name, completion_date = :completion_date, signed_status = :signed_status, collected = :collected, collected_at = :collected_at WHERE id = :id');
             $stmt->execute([
                 ':student_id' => $studentId,
                 ':full_name' => $fullName,
-                ':email' => $email,
                 ':course_name' => $courseName,
                 ':completion_date' => $completionDate,
                 ':signed_status' => $signedStatus,
@@ -57,11 +52,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $message = 'Student updated successfully.';
             $messageType = 'success';
         } else {
-            $stmt = $pdo->prepare('INSERT INTO students (student_id, full_name, email, course_name, completion_date, signed_status, collected, collected_at) VALUES (:student_id, :full_name, :email, :course_name, :completion_date, :signed_status, :collected, :collected_at)');
+            $columns = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite'
+                ? $pdo->query('PRAGMA table_info(students)')->fetchAll(PDO::FETCH_COLUMN, 1)
+                : array_column($pdo->query('SHOW COLUMNS FROM students')->fetchAll(PDO::FETCH_ASSOC), 'Field');
+            $hasLegacyEmailColumn = in_array('email', $columns, true);
+            $emailColumn = $hasLegacyEmailColumn ? 'email, ' : '';
+            $emailValue = $hasLegacyEmailColumn ? "'', " : '';
+            $stmt = $pdo->prepare("INSERT INTO students (student_id, full_name, {$emailColumn}course_name, completion_date, signed_status, collected, collected_at) VALUES (:student_id, :full_name, {$emailValue}:course_name, :completion_date, :signed_status, :collected, :collected_at)");
             $stmt->execute([
                 ':student_id' => $studentId,
                 ':full_name' => $fullName,
-                ':email' => $email,
                 ':course_name' => $courseName,
                 ':completion_date' => $completionDate,
                 ':signed_status' => $signedStatus,
@@ -69,32 +69,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ':collected_at' => $collectedAt,
             ]);
             
-            // Send notification email if not collected and email checkbox is checked
-            if (!$collected && $sendEmail && $emailService->isConfigured()) {
-                $stmt = $pdo->prepare('SELECT id FROM students WHERE student_id = :student_id');
-                $stmt->execute([':student_id' => $studentId]);
-                $newStudentId = $stmt->fetchColumn();
-                
-                if ($emailService->sendCertificateReadyNotification($fullName, $email, $courseName)) {
-                    $stmt = $pdo->prepare('INSERT INTO email_logs (student_id, recipient_email, subject, status) VALUES (:student_id, :recipient_email, :subject, :status)');
-                    $stmt->execute([
-                        ':student_id' => $studentId,
-                        ':recipient_email' => $email,
-                        ':subject' => 'Your Certificate is Ready for Collection',
-                        ':status' => 'sent',
-                    ]);
-                    $message .= ' Email notification sent to student.';
-                } else {
-                    $stmt = $pdo->prepare('INSERT INTO email_logs (student_id, recipient_email, subject, status, error_message) VALUES (:student_id, :recipient_email, :subject, :status, :error_message)');
-                    $stmt->execute([
-                        ':student_id' => $studentId,
-                        ':recipient_email' => $email,
-                        ':subject' => 'Your Certificate is Ready for Collection',
-                        ':status' => 'failed',
-                        ':error_message' => 'Email delivery failed',
-                    ]);
-                }
-            }
             
             $message = 'Student added successfully.';
             $messageType = 'success';
@@ -137,7 +111,7 @@ $query = 'SELECT * FROM students WHERE 1 = 1';
 $params = [];
 
 if ($search !== '') {
-    $query .= ' AND (full_name LIKE :search OR email LIKE :search OR course_name LIKE :search OR student_id LIKE :search)';
+    $query .= ' AND (full_name LIKE :search OR course_name LIKE :search OR student_id LIKE :search)';
     $params[':search'] = '%' . $search . '%';
 }
 
@@ -173,11 +147,10 @@ $courseOptions = $pdo->query('SELECT DISTINCT course_name FROM students ORDER BY
             <div class="header-main">
                 <div>
                     <h1>Certificate Collection Management System</h1>
-                    <p>Manage student records, track certificate collection, and send reminder emails.</p>
+                    <p>Manage student records and track certificate collection.</p>
                 </div>
                 <div class="header-actions">
                     <span>Signed in as <?php echo h(getLoggedInAdmin()); ?></span>
-                    <a href="settings.php" class="secondary-link">Settings</a>
                     <a href="logout.php" class="secondary-link">Sign out</a>
                 </div>
             </div>
@@ -205,10 +178,6 @@ $courseOptions = $pdo->query('SELECT DISTINCT course_name FROM students ORDER BY
                         <input type="text" name="full_name" value="<?php echo h($editingStudent['full_name'] ?? ''); ?>" required>
                     </label>
                     <label>
-                        Email Address
-                        <input type="email" name="email" value="<?php echo h($editingStudent['email'] ?? ''); ?>" required>
-                    </label>
-                    <label>
                         Course Name
                         <input type="text" name="course_name" value="<?php echo h($editingStudent['course_name'] ?? ''); ?>" required>
                     </label>
@@ -224,12 +193,6 @@ $courseOptions = $pdo->query('SELECT DISTINCT course_name FROM students ORDER BY
                         <input type="checkbox" name="collected" value="1" <?php echo ($editingStudent['collected'] ?? 0) ? 'checked' : ''; ?>>
                         Collected status
                     </label>
-                    <?php if (!$editingStudent || !($editingStudent['collected'] ?? 0)): ?>
-                        <label class="checkbox">
-                            <input type="checkbox" name="send_email" value="1" <?php echo $emailService->isConfigured() ? '' : 'disabled'; ?> title="<?php echo $emailService->isConfigured() ? 'Send notification email to student' : 'Email not configured'; ?>">
-                            Send notification email <?php echo !$emailService->isConfigured() ? '<span style="color: #ef4444; font-size: 0.8em;">(not configured)</span>' : ''; ?>
-                        </label>
-                    <?php endif; ?>
 
                 <div class="actions">
                     <button type="submit"><?php echo $editingStudent ? 'Update Student' : 'Add Student'; ?></button>
@@ -246,19 +209,8 @@ $courseOptions = $pdo->query('SELECT DISTINCT course_name FROM students ORDER BY
                     <h2>Student Records</h2>
                 </div>
                 <div class="toolbar-right">
-                    <div class="email-status">
-                        <?php if ($emailService->isConfigured()): ?>
-                            <span class="status-badge status-configured">✓ Email Configured</span>
-                        <?php else: ?>
-                            <span class="status-badge status-not-configured">✗ Email Not Configured</span>
-                            <a href="settings.php" class="secondary-link" style="margin-left: 8px;">Configure Email</a>
-                        <?php endif; ?>
-                    </div>
-                    <form method="post" action="reminders-scheduler.php" class="inline-form" style="display: inline-block; margin-left: 12px;">
-                        <button type="submit" class="small-btn" style="background: #8b5cf6;">📧 Send Reminders</button>
-                    </form>
                     <form method="get" class="filters">
-                        <input type="text" name="search" value="<?php echo h($search); ?>" placeholder="Search by name, email, or course">
+                        <input type="text" name="search" value="<?php echo h($search); ?>" placeholder="Search by name, ID, or course">
                         <select name="course">
                             <option value="">All courses</option>
                             <?php foreach ($courseOptions as $option): ?>
@@ -281,7 +233,6 @@ $courseOptions = $pdo->query('SELECT DISTINCT course_name FROM students ORDER BY
                         <tr>
                             <th>Student ID</th>
                             <th>Name</th>
-                            <th>Email</th>
                             <th>Course</th>
                             <th>Completion Date</th>
                             <th>Signed</th>
@@ -293,14 +244,13 @@ $courseOptions = $pdo->query('SELECT DISTINCT course_name FROM students ORDER BY
                     <tbody>
                         <?php if (empty($students)): ?>
                             <tr>
-                                <td colspan="9">No student records found.</td>
+                                <td colspan="8">No student records found.</td>
                             </tr>
                         <?php else: ?>
                             <?php foreach ($students as $student): ?>
                                 <tr>
                                     <td><?php echo h($student['student_id']); ?></td>
                                     <td><?php echo h($student['full_name']); ?></td>
-                                    <td><?php echo h($student['email']); ?></td>
                                     <td><?php echo h($student['course_name']); ?></td>
                                     <td><?php echo h($student['completion_date']); ?></td>
                                     <td><?php echo $student['signed_status'] ? 'Yes' : 'No'; ?></td>
